@@ -249,7 +249,7 @@ initializeCL(void)
 	/////////////////////////////////////////////////////////////////
 	// Load CL file, build CL program object, create CL kernel object
 	/////////////////////////////////////////////////////////////////
-    const char * filename  = "Template_Kernels.cl";
+    const char * filename  = "brandes_kernels.cl";
     std::string  sourceStr = convertToString(filename);
     const char * source    = sourceStr.c_str();
     size_t sourceSize[]    = { strlen(source) };

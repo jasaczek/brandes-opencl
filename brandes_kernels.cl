@@ -1,7 +1,14 @@
-/*!
- * Sample kernel which multiplies every element of the input array with
- * a constant and stores it at the corresponding output array
- */
+//Atomic add of floats
+inline void atomicFloatAdd(volatile __global float *source, const float operand) {
+	union {
+		unsigned int intVal;
+		float floatVal;
+	} newVal, prevVal;
+	do {
+		prevVal.floatVal = *source;
+		newVal.floatVal = prevVal.floatVal + operand;
+	} while (atomic_cmpxchg((volatile __global int*) source, prevVal.intVal, newVal.intVal) != prevVal.intVal);
+}
 
 
 __kernel void templateKernel(__global  unsigned int * output,
