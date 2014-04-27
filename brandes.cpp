@@ -126,8 +126,8 @@ int initializeCL(void) {
 					NULL);
 			STATUS_CHK("Error: Getting Platform Info.(clGetPlatformInfo)\n")
 			platform = platforms[i];
-			if (!strcmp(pbuff, "Advanced Micro Devices, Inc."))
-				//if (!strcmp(pbuff, "NVIDIA Corporation"))
+			//if (!strcmp(pbuff, "Advanced Micro Devices, Inc."))
+			if (!strcmp(pbuff, "NVIDIA Corporation"))
 			{
 				break;
 			}
@@ -149,7 +149,7 @@ int initializeCL(void) {
 	// Create an OpenCL context
 	/////////////////////////////////////////////////////////////////
 	context = clCreateContextFromType(cps,
-			CL_DEVICE_TYPE_CPU,
+			CL_DEVICE_TYPE_GPU,
 			NULL,
 			NULL,
 			&status);
@@ -503,7 +503,7 @@ int runBFS(void) {
 	STATUS_CHK("Error: Release event object. (clReleaseEvent)\n");
 
 	for(size_t i = 0; i < vertex_num; ++i) {
-		cout << bc_arr[i] << endl;
+		printf("%f\n", bc_arr[i]);
 	}
 	free(dist_arr);
 
