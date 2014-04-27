@@ -310,6 +310,9 @@ int initializeCL(void) {
 	STATUS_CHK("Error: Building Program (clBuildProgram)\n");
 
 	/* get a kernel object handle for a kernel with the given name */
+	kernelRestart = clCreateKernel(program, "brandesKernelReset", &status);
+	STATUS_CHK("Error: Creating restart Kernel from program. (clCreateKernel)\n")
+
 	kernelForward = clCreateKernel(program, "brandesKernelForward", &status);
 	STATUS_CHK("Error: Creating Forward Kernel from program. (clCreateKernel)\n")
 
@@ -371,6 +374,21 @@ int getDeviceInfo(void) {
 			&addressBits,
 			NULL);
 	STATUS_CHK("Error: Getting Device Info. (clGetDeviceInfo)");
+
+	return 0;
+}
+
+int setResetKernelArgs() {
+	cl_int   status;
+
+	status = clSetKernelArg(kernelRestart, 0, sizeof(cl_mem), (void *)&sigma_arr_buffer);
+	STATUS_CHK("Error: Setting reset kernel argument. (sigma_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelRestart, 1, sizeof(cl_mem), (void *)&dist_buffer);
+	STATUS_CHK("Error: Setting reset kernel argument. (dist_buffer)\n");
+
+	status = clSetKernelArg(kernelRestart, 2, sizeof(cl_uint), (void *)&vertex_num);
+	STATUS_CHK("Error: Setting reset kernel argument. (vertex_num)\n");
 
 	return 0;
 }
@@ -496,12 +514,7 @@ int runBFS(void) {
 	kernel_execution_time = 0;
 	memory_transfer_time = 0;
 
-	// Starting distance array. Set it to -1 everywhere.
-	cl_int* dist_arr = (cl_int*) malloc(vertex_num * sizeof(cl_int));
-	memset(dist_arr, -1, sizeof(cl_int) * vertex_num);
-
 	cl_float* delta_arr = (cl_float*) malloc(vertex_num * sizeof(cl_float));
-	cl_uint* sigma_arr = (cl_uint*) malloc(vertex_num * sizeof(cl_uint));
 
 	if (virtual_vertex_num % WORK_GROUP_SIZE) {
 		globalThreads[0] = virtual_vertex_num + WORK_GROUP_SIZE - (virtual_vertex_num % WORK_GROUP_SIZE);
@@ -522,6 +535,9 @@ int runBFS(void) {
 		return 1;
 	}
 
+	if (setResetKernelArgs() == 1) {
+		return 1;
+	}
 	if (setForwardKernelArgs() == 1) {
 		return 1;
 	}
@@ -557,23 +573,32 @@ int runBFS(void) {
 	memory_transfer_time += end_time - start_time;
 
 	for(s = 0; s < vertex_num; ++s) {
-		memset(sigma_arr, 0, sizeof(cl_uint) * vertex_num);
-		sigma_arr[s] = 1;
 		level = 0;
-		dist_arr[s] = 0;
 
-		status = clEnqueueWriteBuffer(commandQueue, dist_buffer, CL_FALSE, 0, sizeof(cl_int) * vertex_num, dist_arr, 0, NULL, &events[1]);
-		STATUS_CHK("Error: Writing to buffer. (dist_buffer)");
-		status = clEnqueueWriteBuffer(commandQueue, sigma_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * vertex_num, sigma_arr, 0, NULL, &events[2]);
-		STATUS_CHK("Error: Writing to buffer. (sigma_arr_buffer)");
+		status = clSetKernelArg(kernelRestart, 3, sizeof(cl_uint), (void *)&s);
+		STATUS_CHK("Error: Setting forward kernel argument. (s)\n");
 
-		status = clWaitForEvents(1, &events[2]);
+		status = clEnqueueNDRangeKernel(
+				commandQueue,
+				kernelRestart,
+				1, // number of dimensions
+				NULL,
+				globalThreadsNormal,
+				localThreads,
+				0,
+				NULL,
+				&events[0]);
+		STATUS_CHK("Error: Enqueueing kernel onto command queue. (clEnqueueNDRangeKernel)\n");
+
+		/* wait for the kernel call to finish execution */
+		status = clWaitForEvents(1, &events[0]);
 		STATUS_CHK("Error: Waiting for kernel run to finish. (clWaitForEvents)\n");
-		status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
+
+		status = clGetEventProfilingInfo(events[0], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
 		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		status = clGetEventProfilingInfo(events[2], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
+		status = clGetEventProfilingInfo(events[0], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
 		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		memory_transfer_time += end_time - start_time;
+		kernel_execution_time += end_time - start_time;
 
 		cont = 1;
 		while(cont) {
@@ -703,8 +728,6 @@ int runBFS(void) {
 		status = clGetEventProfilingInfo(events[0], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
 		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
 		kernel_execution_time += end_time - start_time;
-
-		dist_arr[s] = -1;
 	}
 
 	status = clEnqueueReadBuffer(commandQueue, bc_arr_buffer, CL_FALSE, 0, sizeof(cl_float) * vertex_num, bc_arr, 0, NULL, &events[1]);
@@ -725,9 +748,7 @@ int runBFS(void) {
 	status = clReleaseEvent(events[2]);
 	STATUS_CHK("Error: Release event object. (clReleaseEvent)\n");
 
-	free(dist_arr);
 	free(delta_arr);
-	free(sigma_arr);
 
 	return 0;
 }
@@ -738,6 +759,9 @@ int runBFS(void) {
  */
 int cleanupCL(void) {
 	cl_int status;
+
+	status = clReleaseKernel(kernelRestart);
+	STATUS_CHK("Error: In clReleaseKernel \n");
 
 	status = clReleaseKernel(kernelForward);
 	STATUS_CHK("Error: In clReleaseKernel \n");
@@ -777,6 +801,9 @@ int cleanupCL(void) {
 
 	status = clReleaseMemObject(delta_arr_buffer);
 	STATUS_CHK("Error: In clReleaseMemObject (delta_arr_buffer)\n");
+
+	status = clReleaseMemObject(bc_arr_buffer);
+	STATUS_CHK("Error: In clReleaseMemObject (bc_arr_buffer)\n");
 
 	status = clReleaseMemObject(cont_buffer);
 	STATUS_CHK("Error: In clReleaseMemObject (delta_arr_buffer)\n");

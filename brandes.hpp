@@ -48,6 +48,7 @@ cl_command_queue    commandQueue;
 cl_program program;
 
 // Forward and backward kernel of Brandes algorithm.
+cl_kernel  kernelRestart;
 cl_kernel  kernelForward;
 cl_kernel  kernelDeltaInit;
 cl_kernel  kernelBackward;

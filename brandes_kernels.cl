@@ -15,6 +15,23 @@ inline void AtomicAdd(volatile __global float *source, const float operand) {
 	} while (atomic_cmpxchg((volatile __global unsigned int *)source, prevVal.intVal, newVal.intVal) != prevVal.intVal);
 }
 
+__kernel void brandesKernelReset(
+		__global  unsigned int* sigma_arr,
+		__global int* dist,
+		const unsigned int vnum,
+		const unsigned int cur
+		) {
+	unsigned int u = get_global_id(0);
+	if (u < vnum) {
+		if (u == cur) {
+			sigma_arr[u] = 1;
+			dist[u] = 0;
+		} else {
+			sigma_arr[u] = 0;
+			dist[u] = -1;
+		}
+	}
+}
 
 __kernel void brandesKernelForward(
 		__global  unsigned int* offset_arr,
