@@ -12,6 +12,8 @@
 size_t real_vertex_num;
 size_t vertex_num;
 size_t edges_num;
+cl_ulong kernel_execution_time;
+cl_ulong memory_transfer_time;
 cl_uint* ptrs_arr;
 cl_uint* adjs_arr;
 cl_float* bc_arr;
