@@ -2,34 +2,19 @@
 #include <vector>
 #include <stack>
 #include <queue>
+#include "brandes_utils.hpp"
 
 using std::vector;
 using std::stack;
 using std::priority_queue;
 
-vector<vector<int> > edges;
-int current_max_vertex = -1;
+vector<vector<cl_uint> > edges;
 
 int main(int argc, char* argv[]) {
-	FILE* fin;
-	fin = fopen(argv[1], "r");
-	int x, y;
-	while(EOF != fscanf(fin, "%d %d", &x, &y)) {
-		if(x > current_max_vertex) {
-			current_max_vertex = x;
-			edges.resize(x + 1);
-		}
-		if (y > current_max_vertex) {
-			current_max_vertex = y;
-			edges.resize(y + 1);
-		}
-		edges[x].push_back(y);
-		edges[y].push_back(x);
-	}
-	fclose(fin);
+	readGraph(argv[1], edges);
 
 	vector<double> Cb(edges.size(), 0);
-	for(int s = 0; s < edges.size(); ++s) {
+	for(size_t s = 0; s < edges.size(); ++s) {
 		stack<int> stack;
 		vector<vector<int> > precedessors(edges.size());
 		vector<int> sigma(edges.size(), 0);
@@ -57,7 +42,7 @@ int main(int argc, char* argv[]) {
 
 		vector<double> delta(edges.size(), 0);
 		while(!stack.empty()) {
-			int w = stack.top();
+			size_t w = stack.top();
 			stack.pop();
 			for(auto v = precedessors[w].begin(); v != precedessors[w].end(); ++v) {
 				delta[*v] = delta[*v] + (((double) sigma[*v]) / ((double) sigma[w])) * (1.0 + delta[w]);
@@ -66,9 +51,13 @@ int main(int argc, char* argv[]) {
 				Cb[w] = Cb[w] + delta[w];
 			}
 		}
+
+		for(int i = 0; i < delta.size(); ++i) {
+			printf("Delta: %f\n", delta[i]);
+		}
 	}
 
-	for(int i = 0; i < edges.size(); ++i) {
+	for(size_t i = 0; i < edges.size(); ++i) {
 		printf("%f\n", Cb[i]);
 	}
 	return 0;

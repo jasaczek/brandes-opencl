@@ -8,14 +8,28 @@
 #include <string>
 #include <fstream>
 
-cl_uint *input;
-cl_uint *output;
-cl_uint multiplier;
+// Problem variables.
+size_t vertex_num;
+size_t edges_num;
+cl_uint* ptrs_arr;
+cl_uint* adjs_arr;
+cl_float* bc_arr;
 
-cl_uint width;
+// Buffers
+cl_mem   ptrs_arr_buffer;
+cl_mem   adjs_arr_buffer;
+cl_mem	 prec_arr_buffer;
+cl_mem	 sigma_arr_buffer;
+cl_mem	 dist_buffer;
+cl_mem	 delta_arr_buffer;
+cl_mem	 cont_buffer;
 
-cl_mem   inputBuffer;
-cl_mem	 outputBuffer;
+// Device info.
+cl_uint maxDims;
+size_t maxWorkGroupSize;
+size_t maxWorkItemSizes[3];
+cl_uint addressBits;
+
 
 cl_context          context;
 cl_device_id        *devices;
@@ -23,8 +37,9 @@ cl_command_queue    commandQueue;
 
 cl_program program;
 
-/* This program uses only one kernel and this serves as a handle to it */
-cl_kernel  kernel;
+// Forward and backward kernel of Brandes algorithm.
+cl_kernel  kernelForward;
+cl_kernel  kernelBackward;
 
 int initializeCL(void);
 
@@ -39,24 +54,13 @@ std::string convertToString(const char * filename);
  *
  * It also gets kernel start and end time if profiling is enabled.
  */
-int runCLKernels(void);
+int runBFS(void);
 
 /* Releases OpenCL resources (Context, Memory etc.) */
 int cleanupCL(void);
 
 /* Releases program's resources */
 void cleanupHost(void);
-
-/*
- * Prints no more than 256 elements of the given array.
- * Prints full array if length is less than 256.
- *
- * Prints Array name followed by elements.
- */
-void print1DArray(
-		 const std::string arrayName, 
-         const unsigned int * arrayData, 
-         const unsigned int length);
 
 
 #endif  /* #ifndef BRANDES_H_ */
