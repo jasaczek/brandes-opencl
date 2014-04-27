@@ -18,7 +18,7 @@ using std::endl;;
 
 #define MDEG 4
 
-#define WORK_GROUP_SIZE 512
+#define WORK_GROUP_SIZE 128
 
 int initializeHost(const char* inputPath) {
 	vector<vector<cl_uint>> edges;
@@ -273,6 +273,14 @@ int initializeCL(void) {
 			&status);
 	STATUS_CHK("Error: clCreateBuffer (delta_arr_buffer)\n");
 
+	bc_arr_buffer = clCreateBuffer(
+			context,
+			CL_MEM_READ_WRITE,
+			sizeof(cl_float) * vertex_num,
+			NULL,
+			&status);
+	STATUS_CHK("Error: clCreateBuffer (bc_arr_buffer)\n");
+
 	cont_buffer = clCreateBuffer(
 			context,
 			CL_MEM_WRITE_ONLY,
@@ -305,8 +313,14 @@ int initializeCL(void) {
 	kernelForward = clCreateKernel(program, "brandesKernelForward", &status);
 	STATUS_CHK("Error: Creating Forward Kernel from program. (clCreateKernel)\n")
 
+	kernelDeltaInit = clCreateKernel(program, "brandesKernelDeltaInit", &status);
+	STATUS_CHK("Error: Creating Delta Init Kernel from program. (clCreateKernel)\n");
+
 	kernelBackward = clCreateKernel(program, "brandesKernelBackward", &status);
 	STATUS_CHK("Error: Creating Backward Kernel from program. (clCreateKernel)\n");
+
+	kernelBCUpdate = clCreateKernel(program, "brandesKernelBCUpdate", &status);
+	STATUS_CHK("Error: Creating BCUpdate from program. (clCreateKernel)\n");
 
 	return 0;
 }
@@ -428,6 +442,40 @@ int setBackwardKernelArgs() {
 	return 0;
 }
 
+int setDeltaInitKernelArgs() {
+	cl_int   status;
+
+	status = clSetKernelArg(kernelDeltaInit, 0, sizeof(cl_mem), (void *)&sigma_arr_buffer);
+	STATUS_CHK("Error: Setting delta init kernel argument. (sigma_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelDeltaInit, 1, sizeof(cl_mem), (void *)&delta_arr_buffer);
+	STATUS_CHK("Error: Setting delta init kernel argument. (delta_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelDeltaInit, 2, sizeof(cl_uint), (void *)&vertex_num);
+	STATUS_CHK("Error: Setting delta init kernel argument. (vertex_num)\n");
+
+	return 0;
+}
+
+int setBCUpdateKernelArgs() {
+	cl_int   status;
+
+	status = clSetKernelArg(kernelBCUpdate, 0, sizeof(cl_mem), (void *)&sigma_arr_buffer);
+	STATUS_CHK("Error: Setting bcupdate kernel argument. (sigma_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBCUpdate, 1, sizeof(cl_mem), (void *)&delta_arr_buffer);
+	STATUS_CHK("Error: Setting bcupdate kernel argument. (delta_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBCUpdate, 2, sizeof(cl_mem), (void *)&bc_arr_buffer);
+	STATUS_CHK("Error: Setting bcupdate kernel argument. (bc_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBCUpdate, 3, sizeof(cl_uint), (void *)&vertex_num);
+	STATUS_CHK("Error: Setting bcupdate kernel argument. (bc_arr_buffer)\n");
+
+	return 0;
+}
+
+
 /*
  * \brief Run OpenCL program
  *
@@ -438,8 +486,9 @@ int runBFS(void) {
 	cl_int   status;
 	cl_event events[3];
 	size_t globalThreads[1];
+	size_t globalThreadsNormal[1];
 	size_t localThreads[1];
-	size_t s;
+	cl_uint s;
 	cl_uint level;
 	cl_ulong start_time, end_time;
 	char cont;
@@ -459,12 +508,13 @@ int runBFS(void) {
 	} else {
 		globalThreads[0] = virtual_vertex_num;
 	}
+	if (vertex_num % WORK_GROUP_SIZE) {
+		globalThreadsNormal[0] = vertex_num + WORK_GROUP_SIZE - (vertex_num % WORK_GROUP_SIZE);
+	} else {
+		globalThreadsNormal[0] = vertex_num;
+	}
 	localThreads[0]  = WORK_GROUP_SIZE;
 
-	/*	if (globalThreads[0] > ((unsigned long) 2<<addressBits)) {
-		std::cout<<"Unsupported: Device does not support requested number of global work items."<<std::endl;
-		return 1;
-	}*/
 	if (localThreads[0] > maxWorkGroupSize ||  // maxWorkGroupSize is the total number of threads in a work group
 			localThreads[0] > maxWorkItemSizes[0] // number of threads in each dimension is also limited
 	) {
@@ -475,19 +525,27 @@ int runBFS(void) {
 	if (setForwardKernelArgs() == 1) {
 		return 1;
 	}
+	if (setDeltaInitKernelArgs() == 1) {
+		return 1;
+	}
 	if (setBackwardKernelArgs() == 1) {
 		return 1;
 	}
+	if (setBCUpdateKernelArgs() == 1) {
+		return 1;
+	}
 
-	status = clEnqueueWriteBuffer(commandQueue, ptrs_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * (vertex_num + 1), ptrs_arr, 0, NULL, &events[1]);
+	status = clEnqueueWriteBuffer(commandQueue, ptrs_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * (vertex_num + 1), ptrs_arr, 0, NULL, &events[1]);
 	STATUS_CHK("Error: Writing to buffer. (ptrs_arr_buffer)");
-	status = clEnqueueWriteBuffer(commandQueue, offset_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * virtual_vertex_num, offset_arr, 0, NULL, NULL);
+	status = clEnqueueWriteBuffer(commandQueue, offset_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * virtual_vertex_num, offset_arr, 0, NULL, NULL);
 	STATUS_CHK("Error: Writing to buffer. (offset_arr_buffer)");
-	status = clEnqueueWriteBuffer(commandQueue, vmap_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * virtual_vertex_num, vmap_arr, 0, NULL, NULL);
+	status = clEnqueueWriteBuffer(commandQueue, bc_arr_buffer, CL_FALSE, 0, sizeof(cl_float) * vertex_num, bc_arr, 0, NULL, NULL);
+	STATUS_CHK("Error: Writing to buffer. (offset_arr_buffer)");
+	status = clEnqueueWriteBuffer(commandQueue, vmap_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * virtual_vertex_num, vmap_arr, 0, NULL, NULL);
 	STATUS_CHK("Error: Writing to buffer. (vmap_arr_buffer)");
-	status = clEnqueueWriteBuffer(commandQueue, nvir_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * vertex_num, nvir_arr, 0, NULL, NULL);
+	status = clEnqueueWriteBuffer(commandQueue, nvir_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * vertex_num, nvir_arr, 0, NULL, NULL);
 	STATUS_CHK("Error: Writing to buffer. (nvir_arr_buffer)");
-	status = clEnqueueWriteBuffer(commandQueue, adjs_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * edges_num, adjs_arr, 0, NULL, &events[2]);
+	status = clEnqueueWriteBuffer(commandQueue, adjs_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * edges_num, adjs_arr, 0, NULL, &events[2]);
 	STATUS_CHK("Error: Writing to buffer. (adjs_arr_buffer)");
 
 	status = clWaitForEvents(1, &events[2]);
@@ -504,9 +562,9 @@ int runBFS(void) {
 		level = 0;
 		dist_arr[s] = 0;
 
-		status = clEnqueueWriteBuffer(commandQueue, dist_buffer, CL_TRUE, 0, sizeof(cl_int) * vertex_num, dist_arr, 0, NULL, &events[1]);
+		status = clEnqueueWriteBuffer(commandQueue, dist_buffer, CL_FALSE, 0, sizeof(cl_int) * vertex_num, dist_arr, 0, NULL, &events[1]);
 		STATUS_CHK("Error: Writing to buffer. (dist_buffer)");
-		status = clEnqueueWriteBuffer(commandQueue, sigma_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * vertex_num, sigma_arr, 0, NULL, &events[2]);
+		status = clEnqueueWriteBuffer(commandQueue, sigma_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * vertex_num, sigma_arr, 0, NULL, &events[2]);
 		STATUS_CHK("Error: Writing to buffer. (sigma_arr_buffer)");
 
 		status = clWaitForEvents(1, &events[2]);
@@ -523,7 +581,7 @@ int runBFS(void) {
 			status = clSetKernelArg(kernelForward, 9, sizeof(cl_uint), (void *)&level);
 			STATUS_CHK("Error: Setting forward kernel argument. (level)\n");
 
-			status = clEnqueueWriteBuffer(commandQueue, cont_buffer, CL_TRUE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
+			status = clEnqueueWriteBuffer(commandQueue, cont_buffer, CL_FALSE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
 			STATUS_CHK("Error: Writing to buffer. (cont_buffer)");
 
 			status = clWaitForEvents(1, &events[1]);
@@ -556,7 +614,7 @@ int runBFS(void) {
 			STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
 			kernel_execution_time += end_time - start_time;
 
-			status = clEnqueueReadBuffer(commandQueue, cont_buffer, CL_TRUE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
+			status = clEnqueueReadBuffer(commandQueue, cont_buffer, CL_FALSE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
 			STATUS_CHK("Error: Reading from buffer (cont_buffer)");
 
 			status = clWaitForEvents(1, &events[1]);
@@ -570,34 +628,30 @@ int runBFS(void) {
 			++level;
 		}
 
-		status = clEnqueueReadBuffer(commandQueue, sigma_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * vertex_num, sigma_arr, 0, NULL, &events[1]);
-		STATUS_CHK("Error: Reading from buffer (sigma_arr_buffer)");
+		status = clEnqueueNDRangeKernel(
+				commandQueue,
+				kernelDeltaInit,
+				1, // number of dimensions
+				NULL,
+				globalThreadsNormal,
+				localThreads,
+				0,
+				NULL,
+				&events[0]);
+		STATUS_CHK("Error: Enqueueing kernel onto command queue. (clEnqueueNDRangeKernel)\n");
 
-		status = clWaitForEvents(1, &events[1]);
+		/* wait for the kernel call to finish execution */
+		status = clWaitForEvents(1, &events[0]);
 		STATUS_CHK("Error: Waiting for kernel run to finish. (clWaitForEvents)\n");
-		status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
-		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
-		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		memory_transfer_time += end_time - start_time;
 
-		for (size_t i = 0; i < vertex_num; ++i) {
-			if(sigma_arr[i] != 0) {
-				delta_arr[i] = 1 / cl_float(sigma_arr[i]);
-			} else {
-				delta_arr[i] = 0;
-			}
-		}
-		status = clEnqueueWriteBuffer(commandQueue, delta_arr_buffer, CL_TRUE, 0, sizeof(cl_float) * vertex_num, delta_arr, 0, NULL, &events[1]);
-		STATUS_CHK("Error: Writing to buffer. (delta_arr_buffer)");
+		status = clGetEventProfilingInfo(events[0], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
+		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
+		status = clGetEventProfilingInfo(events[0], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
+		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
+		kernel_execution_time += end_time - start_time;
 
-		status = clWaitForEvents(1, &events[1]);
-		STATUS_CHK("Error: Waiting for kernel run to finish. (clWaitForEvents)\n");
-		status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
-		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
-		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		memory_transfer_time += end_time - start_time;
+		status = clEnqueueReadBuffer(commandQueue, delta_arr_buffer, CL_TRUE, 0, sizeof(cl_float) * vertex_num, delta_arr, 0, NULL, NULL);
+		STATUS_CHK("Error: Reading from buffer. (delta_arr_buffer)");
 
 		while (level > 1) {
 			level = level - 1;
@@ -625,24 +679,45 @@ int runBFS(void) {
 			kernel_execution_time += end_time - start_time;
 		}
 
-		status = clEnqueueReadBuffer(commandQueue, delta_arr_buffer, CL_TRUE, 0, sizeof(cl_float) * vertex_num, delta_arr, 0, NULL, &events[1]);
-		STATUS_CHK("Error: Reading from buffer. (delta_arr_buffer)");
+		status = clSetKernelArg(kernelBCUpdate, 4, sizeof(cl_uint), (void *)&s);
+		STATUS_CHK("Error: Setting bcupdate kernel argument. (s)\n");
 
-		status = clWaitForEvents(1, &events[1]);
+		status = clEnqueueNDRangeKernel(
+				commandQueue,
+				kernelBCUpdate,
+				1, // number of dimensions
+				NULL,
+				globalThreadsNormal,
+				localThreads,
+				0,
+				NULL,
+				&events[0]);
+		STATUS_CHK("Error: Enqueueing kernel onto command queue. (clEnqueueNDRangeKernel)\n");
+
+		/* wait for the kernel call to finish execution */
+		status = clWaitForEvents(1, &events[0]);
 		STATUS_CHK("Error: Waiting for kernel run to finish. (clWaitForEvents)\n");
-		status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
-		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
-		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
-		memory_transfer_time += end_time - start_time;
 
-		for(size_t i = 0; i < vertex_num; ++i) {
-			if (i != s && sigma_arr[i] != 0) {
-				bc_arr[i] += (delta_arr[i] * sigma_arr[i] - 1);
-			}
-		}
+		status = clGetEventProfilingInfo(events[0], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
+		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
+		status = clGetEventProfilingInfo(events[0], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
+		STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
+		kernel_execution_time += end_time - start_time;
+
 		dist_arr[s] = -1;
 	}
+
+	status = clEnqueueReadBuffer(commandQueue, bc_arr_buffer, CL_FALSE, 0, sizeof(cl_float) * vertex_num, bc_arr, 0, NULL, &events[1]);
+	STATUS_CHK("Error: Reading from buffer (cont_buffer)");
+
+	status = clWaitForEvents(1, &events[1]);
+	STATUS_CHK("Error: Waiting for kernel run to finish. (clWaitForEvents)\n");
+	status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_START, sizeof(cl_ulong), &start_time, NULL);
+	STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
+	status = clGetEventProfilingInfo(events[1], CL_PROFILING_COMMAND_END, sizeof(cl_ulong), &end_time, NULL);
+	STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
+	memory_transfer_time += end_time - start_time;
+
 	status = clReleaseEvent(events[0]);
 	STATUS_CHK("Error: Release event object. (clReleaseEvent)\n");
 	status = clReleaseEvent(events[1]);
@@ -667,7 +742,13 @@ int cleanupCL(void) {
 	status = clReleaseKernel(kernelForward);
 	STATUS_CHK("Error: In clReleaseKernel \n");
 
+	status = clReleaseKernel(kernelDeltaInit);
+	STATUS_CHK("Error: In clReleaseKernel \n");
+
 	status = clReleaseKernel(kernelBackward);
+	STATUS_CHK("Error: In clReleaseKernel \n");
+
+	status = clReleaseKernel(kernelBCUpdate);
 	STATUS_CHK("Error: In clReleaseKernel \n");
 
 	status = clReleaseProgram(program);

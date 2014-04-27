@@ -31,6 +31,7 @@ cl_mem   adjs_arr_buffer;
 cl_mem	 sigma_arr_buffer;
 cl_mem	 dist_buffer;
 cl_mem	 delta_arr_buffer;
+cl_mem	 bc_arr_buffer;
 cl_mem	 cont_buffer;
 
 // Device info.
@@ -48,7 +49,9 @@ cl_program program;
 
 // Forward and backward kernel of Brandes algorithm.
 cl_kernel  kernelForward;
+cl_kernel  kernelDeltaInit;
 cl_kernel  kernelBackward;
+cl_kernel  kernelBCUpdate;
 
 int initializeCL(void);
 
