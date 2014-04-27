@@ -10,18 +10,24 @@
 
 // Problem variables.
 size_t real_vertex_num;
+size_t virtual_vertex_num;
 size_t vertex_num;
 size_t edges_num;
 cl_ulong kernel_execution_time;
 cl_ulong memory_transfer_time;
+cl_uint* offset_arr;
+cl_uint* vmap_arr;
+cl_uint* nvir_arr;
 cl_uint* ptrs_arr;
 cl_uint* adjs_arr;
 cl_float* bc_arr;
 
 // Buffers
+cl_mem	 offset_arr_buffer;
+cl_mem	 vmap_arr_buffer;
+cl_mem	 nvir_arr_buffer;
 cl_mem   ptrs_arr_buffer;
 cl_mem   adjs_arr_buffer;
-cl_mem	 prec_arr_buffer;
 cl_mem	 sigma_arr_buffer;
 cl_mem	 dist_buffer;
 cl_mem	 delta_arr_buffer;

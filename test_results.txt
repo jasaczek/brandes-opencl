@@ -1,3 +1,5 @@
+Normal implementation, fine-grined on vertices.
+
 GPU: WORK_GROUP_SIZE = 1
 real    0m25.175s
 user    0m10.509s
@@ -27,3 +29,82 @@ CPU: WORK_GROUP_SIZE = 32
 real    0m2.099s
 user    0m5.839s
 sys     0m3.346s
+
+
+Strided virtualized implementation, parralelised on vertices.
+
+GPU: WORK_GROUP_SIZE = 1
+23024
+23165
+
+real    0m24.747s
+user    0m9.978s
+sys 0m14.772s
+ 
+GPU: WORK_GROUP_SIZE = 4
+6923
+7069
+
+real    0m9.067s
+user    0m4.349s
+sys 0m4.712s
+
+GPU: WORK_GROUP_SIZE = 8
+4072
+4214
+
+real    0m5.788s
+user    0m3.052s
+sys 0m2.732s
+
+GPU: WORK_GROUP_SIZE = 16
+2760
+2903
+
+real    0m4.463s
+user    0m2.565s
+sys 0m1.894s
+
+GPU: WORK_GROUP_SIZE = 32
+2608
+2758
+
+real    0m4.417s
+user    0m2.504s
+sys 0m1.910s
+
+GPU: WORK_GROUP_SIZE = 64
+2282
+2436
+
+real    0m4.046s
+user    0m2.304s
+sys 0m1.736s
+
+GPU: WORK_GROUP_SIZE = 128
+2097
+2252
+
+real    0m3.860s
+user    0m2.219s
+sys 0m1.636s
+
+
+Further increasing of WORK_GROUP_SIZE didn't improve time.
+
+CPU: WORK_GROUP_SIZE = 32
+5307
+5357
+
+real    0m6.367s
+user    0m20.337s
+sys 0m22.303s
+
+
+CPU: WORK_GROUP_SIZE = 128
+2920
+2969
+
+real    0m3.968s
+user    0m17.080s
+sys 0m6.701s

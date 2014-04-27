@@ -1,6 +1,7 @@
 #include "brandes.hpp"
 
 #include <algorithm>
+#include <math.h>
 #include <vector>
 #include "brandes_utils.hpp"
 
@@ -15,13 +16,10 @@ using std::endl;;
 #define STATUS_CHK(msg)
 #endif
 
-#define WORK_GROUP_SIZE 32
+#define MDEG 4
 
-/*
- * \brief Host Initialization 
- *        Allocate and initialize memory 
- *        on the host. Print input array. 
- */
+#define WORK_GROUP_SIZE 512
+
 int initializeHost(const char* inputPath) {
 	vector<vector<cl_uint>> edges;
 	readGraph(inputPath, edges);
@@ -29,26 +27,23 @@ int initializeHost(const char* inputPath) {
 	vertex_num = edges.size();
 	real_vertex_num = vertex_num;
 
-	// Add isolated vertices so number of work items will be divisible by WORK_GROUP_SIZE
-	if (vertex_num % WORK_GROUP_SIZE) {
-		vertex_num += WORK_GROUP_SIZE - (vertex_num % WORK_GROUP_SIZE);
-		edges.resize(vertex_num);
-	}
+	nvir_arr = (cl_uint*) malloc(sizeof(cl_uint) * vertex_num);
+	virtual_vertex_num = 0;
 	edges_num = 0;
-	for(auto it = edges.begin(); it != edges.end(); ++it) {
-		edges_num += it->size();
+	for(size_t iter = 0; iter < vertex_num; ++iter) {
+		nvir_arr[iter] = (edges[iter].size() / MDEG) + ((edges[iter].size() % MDEG) > 0);
+		virtual_vertex_num += nvir_arr[iter];
+		edges_num += edges[iter].size();
 	}
 
-	// Create CSR representation of graph.
-	ptrs_arr = (cl_uint*) malloc(sizeof(cl_uint) * (vertex_num + 1));
-	adjs_arr = (cl_uint*) malloc(sizeof(cl_uint) * edges_num);
-	bc_arr = (cl_float*) malloc(sizeof(cl_float) * vertex_num);
-	if (ptrs_arr == NULL || adjs_arr == NULL || bc_arr == NULL) {
-		cout << "Error in malloc" << endl;
-		return 1;
-	}
+	offset_arr = 	(cl_uint*) 	malloc(sizeof(cl_uint) 	* virtual_vertex_num);
+	vmap_arr = 		(cl_uint*) 	malloc(sizeof(cl_uint) 	* virtual_vertex_num);
+	ptrs_arr = 		(cl_uint*) 	malloc(sizeof(cl_uint) 	* (vertex_num + 1));
+	adjs_arr = 		(cl_uint*) 	malloc(sizeof(cl_uint) 	* edges_num);
+	bc_arr = 		(cl_float*) malloc(sizeof(cl_float) * vertex_num);
 
 	cl_uint current_offset = 0;
+	size_t progress = 0;
 	for(size_t i = 0; i < vertex_num; ++i) {
 		ptrs_arr[i] = current_offset;
 		// Handle error.
@@ -61,6 +56,12 @@ int initializeHost(const char* inputPath) {
 		current_offset += edges[i].size();
 
 		bc_arr[i] = 0;
+
+		for(size_t j = 0; j < nvir_arr[i]; ++j) {
+			offset_arr[progress] = j;
+			vmap_arr[progress] = i;
+			++progress;
+		}
 	}
 	ptrs_arr[vertex_num] = current_offset;
 
@@ -208,6 +209,30 @@ int initializeCL(void) {
 	/////////////////////////////////////////////////////////////////
 	// Create OpenCL memory buffers
 	/////////////////////////////////////////////////////////////////
+	offset_arr_buffer = clCreateBuffer(
+			context,
+			CL_MEM_READ_ONLY,
+			sizeof(cl_uint) * virtual_vertex_num,
+			NULL,
+			&status);
+	STATUS_CHK("Error: clCreateBuffer (offset_arr_buffer)\n");
+
+	vmap_arr_buffer = clCreateBuffer(
+			context,
+			CL_MEM_READ_ONLY,
+			sizeof(cl_uint) * virtual_vertex_num,
+			NULL,
+			&status);
+	STATUS_CHK("Error: clCreateBuffer (vmap_arr_buffer)\n");
+
+	nvir_arr_buffer = clCreateBuffer(
+			context,
+			CL_MEM_READ_ONLY,
+			sizeof(cl_uint) * vertex_num,
+			NULL,
+			&status);
+	STATUS_CHK("Error: clCreateBuffer (nvir_arr_buffer)\n");
+
 	ptrs_arr_buffer = clCreateBuffer(
 			context,
 			CL_MEM_READ_ONLY,
@@ -223,14 +248,6 @@ int initializeCL(void) {
 			NULL,
 			&status);
 	STATUS_CHK("Error: clCreateBuffer (adjs_arr_buffer)\n");
-
-	prec_arr_buffer = clCreateBuffer(
-			context,
-			CL_MEM_READ_WRITE,
-			sizeof(cl_uint) * edges_num,
-			NULL,
-			&status);
-	STATUS_CHK("Error: clCreateBuffer (prec_arr_buffer)\n");
 
 	sigma_arr_buffer = clCreateBuffer(
 			context,
@@ -350,23 +367,32 @@ int getDeviceInfo(void) {
 int setForwardKernelArgs() {
 	cl_int   status;
 
-	status = clSetKernelArg(kernelForward, 0, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
+	status = clSetKernelArg(kernelForward, 0, sizeof(cl_mem), (void *)&offset_arr_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (offset_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 1, sizeof(cl_mem), (void *)&vmap_arr_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (vmap_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 2, sizeof(cl_mem), (void *)&nvir_arr_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (nvir_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 3, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
 	STATUS_CHK("Error: Setting forward kernel argument. (ptrs_arr_buffer)\n");
 
-	status = clSetKernelArg(kernelForward, 1, sizeof(cl_mem), (void *)&adjs_arr_buffer);
+	status = clSetKernelArg(kernelForward, 4, sizeof(cl_mem), (void *)&adjs_arr_buffer);
 	STATUS_CHK("Error: Setting forward kernel argument. (adjs_arr_buffer)\n");
 
-	status = clSetKernelArg(kernelForward, 2, sizeof(cl_mem), (void *)&prec_arr_buffer);
-	STATUS_CHK("Error: Setting forward kernel argument. (prec_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelForward, 3, sizeof(cl_mem), (void *)&sigma_arr_buffer);
+	status = clSetKernelArg(kernelForward, 5, sizeof(cl_mem), (void *)&sigma_arr_buffer);
 	STATUS_CHK("Error: Setting forward kernel argument. (sigma_arr_buffer)\n");
 
-	status = clSetKernelArg(kernelForward, 4, sizeof(cl_mem), (void *)&dist_buffer);
+	status = clSetKernelArg(kernelForward, 6, sizeof(cl_mem), (void *)&dist_buffer);
 	STATUS_CHK("Error: Setting forward kernel argument. (dist_buffer)\n");
 
-	status = clSetKernelArg(kernelForward, 5, sizeof(cl_mem), (void *)&cont_buffer);
+	status = clSetKernelArg(kernelForward, 7, sizeof(cl_mem), (void *)&cont_buffer);
 	STATUS_CHK("Error: Setting forward kernel argument. (cont_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 8, sizeof(cl_uint), (void *)&virtual_vertex_num);
+	STATUS_CHK("Error: Setting forward kernel argument. (virtual_vertex_num)\n");
 	return 0;
 }
 
@@ -376,20 +402,29 @@ int setForwardKernelArgs() {
 int setBackwardKernelArgs() {
 	cl_int   status;
 
-	status = clSetKernelArg(kernelBackward, 0, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
+	status = clSetKernelArg(kernelBackward, 0, sizeof(cl_mem), (void *)&offset_arr_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (offset_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 1, sizeof(cl_mem), (void *)&vmap_arr_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (vmap_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 2, sizeof(cl_mem), (void *)&nvir_arr_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (nvir_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 3, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
 	STATUS_CHK("Error: Setting backward kernel argument. (ptrs_arr_buffer)\n");
 
-	status = clSetKernelArg(kernelBackward, 1, sizeof(cl_mem), (void *)&adjs_arr_buffer);
+	status = clSetKernelArg(kernelBackward, 4, sizeof(cl_mem), (void *)&adjs_arr_buffer);
 	STATUS_CHK("Error: Setting backward kernel argument. (adjs_arr_buffer)\n");
 
-	status = clSetKernelArg(kernelBackward, 2, sizeof(cl_mem), (void *)&prec_arr_buffer);
-	STATUS_CHK("Error: Setting backward kernel argument. (prec_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelBackward, 3, sizeof(cl_mem), (void *)&dist_buffer);
+	status = clSetKernelArg(kernelBackward, 5, sizeof(cl_mem), (void *)&dist_buffer);
 	STATUS_CHK("Error: Setting backward kernel argument. (delta_arr_buffer)\n");
 
-	status = clSetKernelArg(kernelBackward, 4, sizeof(cl_mem), (void *)&delta_arr_buffer);
+	status = clSetKernelArg(kernelBackward, 6, sizeof(cl_mem), (void *)&delta_arr_buffer);
 	STATUS_CHK("Error: Setting backward kernel argument. (delta_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 7, sizeof(cl_uint), (void *)&virtual_vertex_num);
+	STATUS_CHK("Error: Setting backward kernel argument. (virtual_vertex_num)\n");
 	return 0;
 }
 
@@ -416,14 +451,14 @@ int runBFS(void) {
 	cl_int* dist_arr = (cl_int*) malloc(vertex_num * sizeof(cl_int));
 	memset(dist_arr, -1, sizeof(cl_int) * vertex_num);
 
-	// Predecessor array for resetting.
-	cl_char* prec_arr = (cl_char*) malloc(edges_num * sizeof(cl_char));
-	memset(prec_arr, 0, sizeof(cl_char) * edges_num);
-
 	cl_float* delta_arr = (cl_float*) malloc(vertex_num * sizeof(cl_float));
 	cl_uint* sigma_arr = (cl_uint*) malloc(vertex_num * sizeof(cl_uint));
 
-	globalThreads[0] = vertex_num;
+	if (virtual_vertex_num % WORK_GROUP_SIZE) {
+		globalThreads[0] = virtual_vertex_num + WORK_GROUP_SIZE - (virtual_vertex_num % WORK_GROUP_SIZE);
+	} else {
+		globalThreads[0] = virtual_vertex_num;
+	}
 	localThreads[0]  = WORK_GROUP_SIZE;
 
 	/*	if (globalThreads[0] > ((unsigned long) 2<<addressBits)) {
@@ -444,9 +479,15 @@ int runBFS(void) {
 		return 1;
 	}
 
-	status = clEnqueueWriteBuffer(commandQueue, ptrs_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * (vertex_num + 1), ptrs_arr, 0, NULL, &events[1]);
+	status = clEnqueueWriteBuffer(commandQueue, ptrs_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * (vertex_num + 1), ptrs_arr, 0, NULL, &events[1]);
 	STATUS_CHK("Error: Writing to buffer. (ptrs_arr_buffer)");
-	status = clEnqueueWriteBuffer(commandQueue, adjs_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * edges_num, adjs_arr, 0, NULL, &events[2]);
+	status = clEnqueueWriteBuffer(commandQueue, offset_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * virtual_vertex_num, offset_arr, 0, NULL, NULL);
+	STATUS_CHK("Error: Writing to buffer. (offset_arr_buffer)");
+	status = clEnqueueWriteBuffer(commandQueue, vmap_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * virtual_vertex_num, vmap_arr, 0, NULL, NULL);
+	STATUS_CHK("Error: Writing to buffer. (vmap_arr_buffer)");
+	status = clEnqueueWriteBuffer(commandQueue, nvir_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * vertex_num, nvir_arr, 0, NULL, NULL);
+	STATUS_CHK("Error: Writing to buffer. (nvir_arr_buffer)");
+	status = clEnqueueWriteBuffer(commandQueue, adjs_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * edges_num, adjs_arr, 0, NULL, &events[2]);
 	STATUS_CHK("Error: Writing to buffer. (adjs_arr_buffer)");
 
 	status = clWaitForEvents(1, &events[2]);
@@ -463,11 +504,9 @@ int runBFS(void) {
 		level = 0;
 		dist_arr[s] = 0;
 
-		status = clEnqueueWriteBuffer(commandQueue, dist_buffer, CL_FALSE, 0, sizeof(cl_int) * vertex_num, dist_arr, 0, NULL, &events[1]);
+		status = clEnqueueWriteBuffer(commandQueue, dist_buffer, CL_TRUE, 0, sizeof(cl_int) * vertex_num, dist_arr, 0, NULL, &events[1]);
 		STATUS_CHK("Error: Writing to buffer. (dist_buffer)");
-		status = clEnqueueWriteBuffer(commandQueue, prec_arr_buffer, CL_FALSE, 0, sizeof(cl_char) * edges_num, prec_arr, 0, NULL, NULL);
-		STATUS_CHK("Error: Writing to buffer. (prec_arr_buffer)");
-		status = clEnqueueWriteBuffer(commandQueue, sigma_arr_buffer, CL_FALSE, 0, sizeof(cl_uint) * vertex_num, sigma_arr, 0, NULL, &events[2]);
+		status = clEnqueueWriteBuffer(commandQueue, sigma_arr_buffer, CL_TRUE, 0, sizeof(cl_uint) * vertex_num, sigma_arr, 0, NULL, &events[2]);
 		STATUS_CHK("Error: Writing to buffer. (sigma_arr_buffer)");
 
 		status = clWaitForEvents(1, &events[2]);
@@ -481,10 +520,10 @@ int runBFS(void) {
 		cont = 1;
 		while(cont) {
 			cont = 0;
-			status = clSetKernelArg(kernelForward, 6, sizeof(cl_uint), (void *)&level);
+			status = clSetKernelArg(kernelForward, 9, sizeof(cl_uint), (void *)&level);
 			STATUS_CHK("Error: Setting forward kernel argument. (level)\n");
 
-			status = clEnqueueWriteBuffer(commandQueue, cont_buffer, CL_FALSE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
+			status = clEnqueueWriteBuffer(commandQueue, cont_buffer, CL_TRUE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
 			STATUS_CHK("Error: Writing to buffer. (cont_buffer)");
 
 			status = clWaitForEvents(1, &events[1]);
@@ -517,7 +556,7 @@ int runBFS(void) {
 			STATUS_CHK("Error: Get profiling info. (clGetEventProfilingInfo)\n");
 			kernel_execution_time += end_time - start_time;
 
-			status = clEnqueueReadBuffer(commandQueue, cont_buffer, CL_FALSE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
+			status = clEnqueueReadBuffer(commandQueue, cont_buffer, CL_TRUE, 0, sizeof(cl_char), &cont, 0, NULL, &events[1]);
 			STATUS_CHK("Error: Reading from buffer (cont_buffer)");
 
 			status = clWaitForEvents(1, &events[1]);
@@ -563,7 +602,7 @@ int runBFS(void) {
 		while (level > 1) {
 			level = level - 1;
 
-			status = clSetKernelArg(kernelBackward, 5, sizeof(cl_uint), (void *)&level);
+			status = clSetKernelArg(kernelBackward, 8, sizeof(cl_uint), (void *)&level);
 			STATUS_CHK("Error: Setting backward kernel argument. (level)\n");
 
 			status = clEnqueueNDRangeKernel(
@@ -612,7 +651,6 @@ int runBFS(void) {
 	STATUS_CHK("Error: Release event object. (clReleaseEvent)\n");
 
 	free(dist_arr);
-	free(prec_arr);
 	free(delta_arr);
 	free(sigma_arr);
 
@@ -635,14 +673,20 @@ int cleanupCL(void) {
 	status = clReleaseProgram(program);
 	STATUS_CHK("Error: In clReleaseProgram\n");
 
+	status = clReleaseMemObject(offset_arr_buffer);
+	STATUS_CHK("Error: In clReleaseMemObject (offset_arr_buffer)\n");
+
+	status = clReleaseMemObject(vmap_arr_buffer);
+	STATUS_CHK("Error: In clReleaseMemObject (vmap_arr_buffer)\n");
+
+	status = clReleaseMemObject(nvir_arr_buffer);
+	STATUS_CHK("Error: In clReleaseMemObject (nvir_arr_buffer)\n");
+
 	status = clReleaseMemObject(ptrs_arr_buffer);
 	STATUS_CHK("Error: In clReleaseMemObject (ptrs_arr_buffer)\n");
 
 	status = clReleaseMemObject(adjs_arr_buffer);
 	STATUS_CHK("Error: In clReleaseMemObject (adjs_arr_buffer)\n");
-
-	status = clReleaseMemObject(prec_arr_buffer);
-	STATUS_CHK("Error: In clReleaseMemObject (prec_arr_buffer)\n");
 
 	status = clReleaseMemObject(sigma_arr_buffer);
 	STATUS_CHK("Error: In clReleaseMemObject (sigma_arr_buffer)\n");
@@ -670,19 +714,31 @@ int cleanupCL(void) {
  * \brief Releases program's resources 
  */
 void cleanupHost(void) {
-	if(ptrs_arr != NULL) {
+	if (offset_arr != NULL) {
+		free(offset_arr);
+		offset_arr = NULL;
+	}
+	if (vmap_arr != NULL) {
+		free(vmap_arr);
+		vmap_arr = NULL;
+	}
+	if (nvir_arr != NULL) {
+		free(nvir_arr);
+		nvir_arr = NULL;
+	}
+	if (ptrs_arr != NULL) {
 		free(ptrs_arr);
 		ptrs_arr = NULL;
 	}
-	if(adjs_arr != NULL) {
+	if (adjs_arr != NULL) {
 		free(adjs_arr);
 		adjs_arr = NULL;
 	}
-	if(bc_arr != NULL) {
+	if (bc_arr != NULL) {
 		free(bc_arr);
 		bc_arr = NULL;
 	}
-	if(devices != NULL) {
+	if (devices != NULL) {
 		free(devices);
 		devices = NULL;
 	}
