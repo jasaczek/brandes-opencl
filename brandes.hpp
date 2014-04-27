@@ -9,6 +9,7 @@
 #include <fstream>
 
 // Problem variables.
+size_t real_vertex_num;
 size_t vertex_num;
 size_t edges_num;
 cl_uint* ptrs_arr;

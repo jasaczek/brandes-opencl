@@ -1,0 +1,29 @@
+GPU: WORK_GROUP_SIZE = 1
+real    0m25.175s
+user    0m10.509s
+sys     0m14.634s
+
+GPU: WORK_GROUP_SIZE = 4
+real    0m21.439s
+user    0m8.912s
+sys     0m12.521s
+
+GPU: WORK_GROUP_SIZE = 8
+real    0m20.403s
+user    0m8.505s
+sys     0m11.898s
+
+GPU: WORK_GROUP_SIZE = 16
+real    0m20.216s
+user    0m8.546s
+sys     0m11.661s
+
+GPU: WORK_GROUP_SIZE = 32
+real    0m20.847s
+user    0m8.427s
+sys     0m12.413s
+
+CPU: WORK_GROUP_SIZE = 32
+real    0m2.099s
+user    0m5.839s
+sys     0m3.346s

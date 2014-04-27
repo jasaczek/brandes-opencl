@@ -8,7 +8,14 @@ using std::vector;
 using std::cout;
 using std::endl;;
 
+#define DEBUG
+#ifdef DEBUG
 #define STATUS_CHK(msg) if(status != CL_SUCCESS) { cout << "STATUS: " << status << ". " << msg; return 1; }
+#else
+#define STATUS_CHK(msg)
+#endif
+
+#define WORK_GROUP_SIZE 32
 
 /*
  * \brief Host Initialization 
@@ -20,6 +27,13 @@ int initializeHost(const char* inputPath) {
 	readGraph(inputPath, edges);
 
 	vertex_num = edges.size();
+	real_vertex_num = vertex_num;
+
+	// Add isolated vertices so number of work items will be divisible by WORK_GROUP_SIZE
+	if (vertex_num % WORK_GROUP_SIZE) {
+		vertex_num += WORK_GROUP_SIZE - (vertex_num % WORK_GROUP_SIZE);
+		edges.resize(vertex_num);
+	}
 	edges_num = 0;
 	for(auto it = edges.begin(); it != edges.end(); ++it) {
 		edges_num += it->size();
@@ -126,8 +140,8 @@ int initializeCL(void) {
 					NULL);
 			STATUS_CHK("Error: Getting Platform Info.(clGetPlatformInfo)\n")
 			platform = platforms[i];
-			//if (!strcmp(pbuff, "Advanced Micro Devices, Inc."))
-			if (!strcmp(pbuff, "NVIDIA Corporation"))
+			if (!strcmp(pbuff, "Advanced Micro Devices, Inc."))
+			// if (!strcmp(pbuff, "NVIDIA Corporation"))
 			{
 				break;
 			}
@@ -149,7 +163,7 @@ int initializeCL(void) {
 	// Create an OpenCL context
 	/////////////////////////////////////////////////////////////////
 	context = clCreateContextFromType(cps,
-			CL_DEVICE_TYPE_GPU,
+			CL_DEVICE_TYPE_CPU,
 			NULL,
 			NULL,
 			&status);
@@ -331,6 +345,55 @@ int getDeviceInfo(void) {
 }
 
 /*
+ * Set forward kernel buffer arguments.
+ */
+int setForwardKernelArgs() {
+	cl_int   status;
+
+	status = clSetKernelArg(kernelForward, 0, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (ptrs_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 1, sizeof(cl_mem), (void *)&adjs_arr_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (adjs_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 2, sizeof(cl_mem), (void *)&prec_arr_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (prec_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 3, sizeof(cl_mem), (void *)&sigma_arr_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (sigma_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 4, sizeof(cl_mem), (void *)&dist_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (dist_buffer)\n");
+
+	status = clSetKernelArg(kernelForward, 5, sizeof(cl_mem), (void *)&cont_buffer);
+	STATUS_CHK("Error: Setting forward kernel argument. (cont_buffer)\n");
+	return 0;
+}
+
+/*
+ * Set backward kernel buffer arguments.
+ */
+int setBackwardKernelArgs() {
+	cl_int   status;
+
+	status = clSetKernelArg(kernelBackward, 0, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (ptrs_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 1, sizeof(cl_mem), (void *)&adjs_arr_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (adjs_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 2, sizeof(cl_mem), (void *)&prec_arr_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (prec_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 3, sizeof(cl_mem), (void *)&dist_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (delta_arr_buffer)\n");
+
+	status = clSetKernelArg(kernelBackward, 4, sizeof(cl_mem), (void *)&delta_arr_buffer);
+	STATUS_CHK("Error: Setting backward kernel argument. (delta_arr_buffer)\n");
+	return 0;
+}
+
+/*
  * \brief Run OpenCL program
  *
  *        Bind host variables to kernel arguments
@@ -357,7 +420,7 @@ int runBFS(void) {
 	cl_uint* sigma_arr = (cl_uint*) malloc(vertex_num * sizeof(cl_uint));
 
 	globalThreads[0] = vertex_num;
-	localThreads[0]  = 1;
+	localThreads[0]  = WORK_GROUP_SIZE;
 
 	/*	if (globalThreads[0] > ((unsigned long) 2<<addressBits)) {
 		std::cout<<"Unsupported: Device does not support requested number of global work items."<<std::endl;
@@ -370,40 +433,12 @@ int runBFS(void) {
 		return 1;
 	}
 
-	// Forward kernel.
-	status = clSetKernelArg(kernelForward, 0, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
-	STATUS_CHK("Error: Setting forward kernel argument. (ptrs_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelForward, 1, sizeof(cl_mem), (void *)&adjs_arr_buffer);
-	STATUS_CHK("Error: Setting forward kernel argument. (adjs_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelForward, 2, sizeof(cl_mem), (void *)&prec_arr_buffer);
-	STATUS_CHK("Error: Setting forward kernel argument. (prec_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelForward, 3, sizeof(cl_mem), (void *)&sigma_arr_buffer);
-	STATUS_CHK("Error: Setting forward kernel argument. (sigma_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelForward, 4, sizeof(cl_mem), (void *)&dist_buffer);
-	STATUS_CHK("Error: Setting forward kernel argument. (dist_buffer)\n");
-
-	status = clSetKernelArg(kernelForward, 5, sizeof(cl_mem), (void *)&cont_buffer);
-	STATUS_CHK("Error: Setting forward kernel argument. (cont_buffer)\n");
-
-	// Backwards kernel.
-	status = clSetKernelArg(kernelBackward, 0, sizeof(cl_mem), (void *)&ptrs_arr_buffer);
-	STATUS_CHK("Error: Setting backward kernel argument. (ptrs_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelBackward, 1, sizeof(cl_mem), (void *)&adjs_arr_buffer);
-	STATUS_CHK("Error: Setting backward kernel argument. (adjs_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelBackward, 2, sizeof(cl_mem), (void *)&prec_arr_buffer);
-	STATUS_CHK("Error: Setting backward kernel argument. (prec_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelBackward, 3, sizeof(cl_mem), (void *)&dist_buffer);
-	STATUS_CHK("Error: Setting backward kernel argument. (delta_arr_buffer)\n");
-
-	status = clSetKernelArg(kernelBackward, 4, sizeof(cl_mem), (void *)&delta_arr_buffer);
-	STATUS_CHK("Error: Setting backward kernel argument. (delta_arr_buffer)\n");
+	if (setForwardKernelArgs() == 1) {
+		return 1;
+	}
+	if (setBackwardKernelArgs() == 1) {
+		return 1;
+	}
 
 	for(s = 0; s < vertex_num; ++s) {
 		memset(sigma_arr, 0, sizeof(cl_uint) * vertex_num);
@@ -424,16 +459,7 @@ int runBFS(void) {
 			status = clSetKernelArg(kernelForward, 6, sizeof(cl_uint), (void *)&level);
 			STATUS_CHK("Error: Setting forward kernel argument. (level)\n");
 
-			status = clEnqueueWriteBuffer(commandQueue,
-					cont_buffer,
-					CL_TRUE,
-					0,
-					sizeof(cl_char),
-					&cont,
-					0,
-					NULL,
-					NULL);
-
+			status = clEnqueueWriteBuffer(commandQueue, cont_buffer, CL_TRUE, 0, sizeof(cl_char), &cont, 0, NULL, NULL);
 			STATUS_CHK("Error: Writing to buffer. (cont_buffer)");
 
 			status = clEnqueueNDRangeKernel(
@@ -491,7 +517,8 @@ int runBFS(void) {
 			STATUS_CHK("Error: Waiting for kernel run to finish. (clWaitForEvents)\n");
 		}
 
-		clEnqueueReadBuffer(commandQueue, delta_arr_buffer, CL_TRUE, 0, sizeof(cl_float) * vertex_num, delta_arr, 0, NULL, NULL);
+		status = clEnqueueReadBuffer(commandQueue, delta_arr_buffer, CL_TRUE, 0, sizeof(cl_float) * vertex_num, delta_arr, 0, NULL, NULL);
+		STATUS_CHK("Error: Reading from buffer. (delta_arr_buffer)");
 		for(size_t i = 0; i < vertex_num; ++i) {
 			if (i != s && sigma_arr[i] != 0) {
 				bc_arr[i] += (delta_arr[i] * sigma_arr[i] - 1);
@@ -502,10 +529,13 @@ int runBFS(void) {
 	status = clReleaseEvent(events[0]);
 	STATUS_CHK("Error: Release event object. (clReleaseEvent)\n");
 
-	for(size_t i = 0; i < vertex_num; ++i) {
+	for(size_t i = 0; i < real_vertex_num; ++i) {
 		printf("%f\n", bc_arr[i]);
 	}
 	free(dist_arr);
+	free(prec_arr);
+	free(delta_arr);
+	free(sigma_arr);
 
 	return 0;
 }
